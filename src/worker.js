@@ -1,6 +1,6 @@
 /**
  * Kid Tracker - 孩子实时位置追踪器
- * Cloudflare Worker 后端
+ * Cloudflare Worker 后端 (KV版本)
  */
 
 const FEISHU_WEBHOOK = 'https://open.feishu.cn/open-apis/bot/v2/hook/YOUR_WEBHOOK_URL';
@@ -14,7 +14,7 @@ const corsHeaders = {
 
 // 计算两点间距离（米）
 function getDistance(lat1, lng1, lat2, lng2) {
-  const R = 6371000; // 地球半径（米）
+  const R = 6371000;
   const dLat = (lat2 - lat1) * Math.PI / 180;
   const dLng = (lng2 - lng1) * Math.PI / 180;
   const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
@@ -30,10 +30,7 @@ async function sendFeishuAlert(message) {
     await fetch(FEISHU_WEBHOOK, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        msg_type: 'text',
-        content: { text: message }
-      })
+      body: JSON.stringify({ msg_type: 'text', content: { text: message } })
     });
   } catch (e) {
     console.error('飞书通知失败:', e);
@@ -45,7 +42,6 @@ export default {
     const url = new URL(request.url);
     const path = url.pathname;
 
-    // CORS preflight
     if (request.method === 'OPTIONS') {
       return new Response(null, { headers: corsHeaders });
     }
@@ -62,17 +58,24 @@ export default {
           });
         }
 
-        // 保存位置
-        await env.DB.prepare(
-          'INSERT INTO locations (device_id, latitude, longitude, accuracy, battery) VALUES (?, ?, ?, ?, ?)'
-        ).bind(device_id, latitude, longitude, accuracy || null, battery || null).run();
+        const timestamp = Date.now();
+        const locationData = { device_id, latitude, longitude, accuracy, battery, timestamp };
+        
+        // 保存最新位置
+        await env.KV.put(`location:${device_id}:latest`, JSON.stringify(locationData));
+        
+        // 保存历史轨迹（保留24小时）
+        const historyKey = `location:${device_id}:history`;
+        let history = JSON.parse(await env.KV.get(historyKey) || '[]');
+        history.push(locationData);
+        // 只保留24小时内的数据（每10秒一条 = 8640条）
+        if (history.length > 8640) history = history.slice(-8640);
+        await env.KV.put(historyKey, JSON.stringify(history));
 
         // 检查电子围栏
-        const geofences = await env.DB.prepare(
-          'SELECT * FROM geofences WHERE device_id = ? AND enabled = 1'
-        ).bind(device_id).all();
-
-        for (const fence of geofences.results) {
+        const geofences = JSON.parse(await env.KV.get(`geofence:${device_id}`) || '[]');
+        for (const fence of geofences) {
+          if (!fence.enabled) continue;
           const distance = getDistance(latitude, longitude, fence.center_lat, fence.center_lng);
           if (distance > fence.radius) {
             ctx.waitUntil(sendFeishuAlert(
@@ -91,12 +94,8 @@ export default {
       // ==================== 获取实时位置 ====================
       if (path === '/api/location/latest' && request.method === 'GET') {
         const device_id = url.searchParams.get('device_id') || 'kid-1';
-        
-        const result = await env.DB.prepare(
-          'SELECT * FROM locations WHERE device_id = ? ORDER BY timestamp DESC LIMIT 1'
-        ).bind(device_id).first();
-
-        return new Response(JSON.stringify(result || {}), {
+        const data = await env.KV.get(`location:${device_id}:latest`);
+        return new Response(data || '{}', {
           headers: { ...corsHeaders, 'Content-Type': 'application/json' }
         });
       }
@@ -106,13 +105,14 @@ export default {
         const device_id = url.searchParams.get('device_id') || 'kid-1';
         const hours = parseInt(url.searchParams.get('hours') || '24');
         
-        const results = await env.DB.prepare(
-          `SELECT * FROM locations 
-           WHERE device_id = ? AND timestamp > datetime('now', '-' || ? || ' hours')
-           ORDER BY timestamp ASC`
-        ).bind(device_id, hours).all();
-
-        return new Response(JSON.stringify(results.results), {
+        const historyStr = await env.KV.get(`location:${device_id}:history`);
+        let history = JSON.parse(historyStr || '[]');
+        
+        // 过滤指定时间范围
+        const cutoff = Date.now() - hours * 3600 * 1000;
+        history = history.filter(p => p.timestamp > cutoff);
+        
+        return new Response(JSON.stringify(history), {
           headers: { ...corsHeaders, 'Content-Type': 'application/json' }
         });
       }
@@ -121,33 +121,43 @@ export default {
       if (path === '/api/geofence' && request.method === 'POST') {
         const body = await request.json();
         const { device_id, name, center_lat, center_lng, radius } = body;
-
-        const result = await env.DB.prepare(
-          'INSERT INTO geofences (device_id, name, center_lat, center_lng, radius) VALUES (?, ?, ?, ?, ?)'
-        ).bind(device_id, name, center_lat, center_lng, radius).run();
-
-        return new Response(JSON.stringify({ success: true, id: result.meta.last_row_id }), {
+        
+        const key = `geofence:${device_id || 'kid-1'}`;
+        let fences = JSON.parse(await env.KV.get(key) || '[]');
+        
+        const newFence = {
+          id: Date.now(),
+          name: name || '围栏',
+          center_lat,
+          center_lng,
+          radius: radius || 500,
+          enabled: true
+        };
+        fences.push(newFence);
+        await env.KV.put(key, JSON.stringify(fences));
+        
+        return new Response(JSON.stringify({ success: true, id: newFence.id }), {
           headers: { ...corsHeaders, 'Content-Type': 'application/json' }
         });
       }
 
       if (path === '/api/geofence' && request.method === 'GET') {
         const device_id = url.searchParams.get('device_id') || 'kid-1';
-        
-        const results = await env.DB.prepare(
-          'SELECT * FROM geofences WHERE device_id = ?'
-        ).bind(device_id).all();
-
-        return new Response(JSON.stringify(results.results), {
+        const fences = await env.KV.get(`geofence:${device_id}`);
+        return new Response(fences || '[]', {
           headers: { ...corsHeaders, 'Content-Type': 'application/json' }
         });
       }
 
-      if (path.match(/^\/api\/geofence\/\d+$/) && request.method === 'DELETE') {
-        const id = path.split('/')[3];
+      if (path.match(/^\/api\/geofence\/\d+/) && request.method === 'DELETE') {
+        const fenceId = parseInt(path.split('/')[3]);
+        const device_id = url.searchParams.get('device_id') || 'kid-1';
         
-        await env.DB.prepare('DELETE FROM geofences WHERE id = ?').bind(id).run();
-
+        const key = `geofence:${device_id}`;
+        let fences = JSON.parse(await env.KV.get(key) || '[]');
+        fences = fences.filter(f => f.id !== fenceId);
+        await env.KV.put(key, JSON.stringify(fences));
+        
         return new Response(JSON.stringify({ success: true }), {
           headers: { ...corsHeaders, 'Content-Type': 'application/json' }
         });
@@ -187,19 +197,21 @@ function getIndexHTML() {
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f5f5f5; }
-    #map { width: 100%; height: 70vh; }
-    .panel { padding: 16px; background: white; border-top: 1px solid #eee; }
-    .btn { padding: 10px 20px; border: none; border-radius: 8px; cursor: pointer; font-size: 14px; margin: 4px; }
+    #map { width: 100%; height: 60vh; }
+    .panel { padding: 16px; background: white; }
+    .btn { padding: 10px 16px; border: none; border-radius: 8px; cursor: pointer; font-size: 14px; margin: 4px; }
     .btn-primary { background: #1677ff; color: white; }
     .btn-danger { background: #ff4d4f; color: white; }
-    .info { margin: 10px 0; color: #666; }
-    .geofence-list { margin-top: 10px; }
-    .geofence-item { padding: 10px; background: #fafafa; border-radius: 8px; margin: 8px 0; display: flex; justify-content: space-between; align-items: center; }
+    .btn-secondary { background: #f0f0f0; color: #333; }
+    .info { padding: 12px 0; color: #666; font-size: 14px; border-bottom: 1px solid #eee; }
     .status { padding: 4px 8px; border-radius: 4px; font-size: 12px; }
     .status.online { background: #e6f7e6; color: #52c41a; }
     .status.offline { background: #fff2f0; color: #ff4d4f; }
-    #addGeofence { display: none; padding: 16px; background: #f0f0f0; border-radius: 8px; margin-top: 10px; }
-    #addGeofence input { padding: 8px; margin: 4px 0; border: 1px solid #ddd; border-radius: 4px; width: 100%; }
+    #addGeofence { display: none; padding: 16px; background: #f9f9f9; border-radius: 8px; margin-top: 12px; }
+    #addGeofence input { padding: 8px 12px; margin: 6px 0; border: 1px solid #ddd; border-radius: 6px; width: 100%; }
+    #addGeofence h4 { margin-bottom: 8px; }
+    .geofence-list { margin-top: 12px; }
+    .geofence-item { padding: 10px 12px; background: #fafafa; border-radius: 8px; margin: 6px 0; display: flex; justify-content: space-between; align-items: center; }
   </style>
 </head>
 <body>
@@ -210,62 +222,94 @@ function getIndexHTML() {
       <span style="margin-left: 16px">电量: <span id="battery">--</span>%</span>
       <span style="margin-left: 16px">更新: <span id="updateTime">--</span></span>
     </div>
-    <button class="btn btn-primary" onclick="toggleHistory()">📊 历史轨迹</button>
-    <button class="btn btn-primary" onclick="toggleGeofencePanel()">🔒 电子围栏</button>
-    
+    <div style="margin-top: 12px">
+      <button class="btn btn-primary" onclick="toggleHistory()">📊 历史轨迹</button>
+      <button class="btn btn-primary" onclick="toggleGeofencePanel()">🔒 添加围栏</button>
+      <button class="btn btn-secondary" onclick="centerToKid()">📍 定位</button>
+    </div>
     <div id="addGeofence">
       <h4>添加电子围栏</h4>
-      <input type="text" id="fenceName" placeholder="围栏名称（如：学校）">
+      <input type="text" id="fenceName" placeholder="围栏名称（如：学校、家）">
       <input type="number" id="fenceRadius" placeholder="半径（米）" value="500">
-      <p style="font-size: 12px; color: #999; margin: 8px 0;">点击地图选择围栏中心点</p>
+      <p style="font-size: 12px; color: #999; margin: 8px 0;">💡 点击地图选择围栏中心点</p>
       <button class="btn btn-primary" onclick="saveGeofence()">保存围栏</button>
-      <button class="btn" onclick="toggleGeofencePanel()">取消</button>
+      <button class="btn btn-secondary" onclick="toggleGeofencePanel()">取消</button>
     </div>
-    
     <div class="geofence-list" id="geofenceList"></div>
   </div>
 
-  <script src="https://webapi.amap.com/maps?v=2.0&key=YOUR_AMAP_KEY"></script>
   <script>
     const API = '/api';
     const DEVICE_ID = 'kid-1';
     
-    let map, marker, polyline, historyData = [];
+    let map, marker, polyline;
     let showHistory = false, addingGeofence = false, geofenceCenter = null;
-    let geofenceCircles = [];
+    let geofenceCircles = [], historyData = [];
     
     function init() {
-      map = new AMap.Map('map', { zoom: 15, center: [116.397428, 39.90923] });
+      // 使用 Leaflet (开源免费，无需API Key)
+      const script = document.createElement('script');
+      script.src = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
+      script.onload = () => {
+        map = L.map('map').setView([39.90923, 116.397428], 15);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+          attribution: '© OpenStreetMap'
+        }).addTo(map);
+        
+        marker = L.marker([39.90923, 116.397428]).addTo(map);
+        polyline = L.polyline([], { color: '#1677ff', weight: 4 }).addTo(map);
+        
+        map.on('click', function(e) {
+          if (addingGeofence) {
+            geofenceCenter = { lat: e.latlng.lat, lng: e.latlng.lng };
+            L.circle([e.latlng.lat, e.latlng.lng], {
+              radius: parseInt(document.getElementById('fenceRadius').value) || 500,
+              fillColor: '#1677ff',
+              fillOpacity: 0.2,
+              color: '#1677ff'
+            }).addTo(map);
+            alert('围栏中心已设置：' + e.latlng.lat.toFixed(4) + ', ' + e.latlng.lng.toFixed(4));
+          }
+        });
+        
+        setInterval(fetchLocation, 5000);
+        fetchLocation();
+        fetchGeofences();
+      };
+      document.head.appendChild(script);
       
-      marker = new AMap.Marker({ map: map });
-      polyline = new AMap.Polyline({ map: map, strokeColor: '#1677ff', strokeWeight: 4 });
-      
-      map.on('click', function(e) {
-        if (addingGeofence) {
-          geofenceCenter = [e.lnglat.lng, e.lnglat.lat];
-          new AMap.Circle({ map: map, center: e.lnglat, radius: parseInt(document.getElementById('fenceRadius').value), fillColor: '#1677ff', fillOpacity: 0.2 });
-        }
-      });
-      
-      setInterval(fetchLocation, 5000);
-      fetchLocation();
-      fetchGeofences();
+      const link = document.createElement('link');
+      link.rel = 'stylesheet';
+      link.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
+      document.head.appendChild(link);
     }
     
     async function fetchLocation() {
-      const res = await fetch(API + '/location/latest?device_id=' + DEVICE_ID);
-      const data = await res.json();
-      
-      if (data.latitude) {
-        const pos = [data.longitude, data.latitude];
-        marker.setPosition(pos);
-        map.setCenter(pos);
+      try {
+        const res = await fetch(API + '/location/latest?device_id=' + DEVICE_ID);
+        const data = await res.json();
         
-        document.getElementById('status').textContent = '在线';
-        document.getElementById('status').className = 'status online';
-        document.getElementById('battery').textContent = data.battery || '--';
-        document.getElementById('updateTime').textContent = new Date(data.timestamp).toLocaleTimeString();
+        if (data.latitude) {
+          marker.setLatLng([data.latitude, data.longitude]);
+          
+          const elapsed = (Date.now() - data.timestamp) / 1000;
+          const isOnline = elapsed < 60;
+          
+          document.getElementById('status').textContent = isOnline ? '在线' : '离线';
+          document.getElementById('status').className = 'status ' + (isOnline ? 'online' : 'offline');
+          document.getElementById('battery').textContent = data.battery || '--';
+          document.getElementById('updateTime').textContent = new Date(data.timestamp).toLocaleTimeString();
+        }
+      } catch (e) {
+        console.error('获取位置失败:', e);
       }
+    }
+    
+    function centerToKid() {
+      fetchLocation().then(() => {
+        const pos = marker.getLatLng();
+        map.setView(pos, 16);
+      });
     }
     
     async function toggleHistory() {
@@ -276,12 +320,14 @@ function getIndexHTML() {
         historyData = await res.json();
         
         if (historyData.length > 0) {
-          const path = historyData.map(p => [p.longitude, p.latitude]);
-          polyline.setPath(path);
-          map.setFitView([polyline]);
+          const path = historyData.map(p => [p.latitude, p.longitude]);
+          polyline.setLatLngs(path);
+          map.fitBounds(polyline.getBounds());
+        } else {
+          alert('暂无历史轨迹数据');
         }
       } else {
-        polyline.setPath([]);
+        polyline.setLatLngs([]);
       }
     }
     
@@ -289,10 +335,16 @@ function getIndexHTML() {
       const panel = document.getElementById('addGeofence');
       addingGeofence = !addingGeofence;
       panel.style.display = addingGeofence ? 'block' : 'none';
+      if (addingGeofence) {
+        alert('请在地图上点击选择围栏中心点');
+      }
     }
     
     async function saveGeofence() {
-      if (!geofenceCenter) return alert('请先在地图上点击选择中心点');
+      if (!geofenceCenter) {
+        alert('请先在地图上点击选择中心点');
+        return;
+      }
       
       const name = document.getElementById('fenceName').value || '围栏';
       const radius = parseInt(document.getElementById('fenceRadius').value) || 500;
@@ -303,14 +355,15 @@ function getIndexHTML() {
         body: JSON.stringify({
           device_id: DEVICE_ID,
           name: name,
-          center_lat: geofenceCenter[1],
-          center_lng: geofenceCenter[0],
+          center_lat: geofenceCenter.lat,
+          center_lng: geofenceCenter.lng,
           radius: radius
         })
       });
       
-      alert('围栏已添加！');
+      alert('围栏「' + name + '」已添加！');
       toggleGeofencePanel();
+      geofenceCenter = null;
       fetchGeofences();
     }
     
@@ -318,39 +371,32 @@ function getIndexHTML() {
       const res = await fetch(API + '/geofence?device_id=' + DEVICE_ID);
       const fences = await res.json();
       
-      // 清除旧围栏显示
-      geofenceCircles.forEach(c => c.setMap(null));
+      geofenceCircles.forEach(c => c.remove());
       geofenceCircles = [];
       
       const list = document.getElementById('geofenceList');
       list.innerHTML = '';
       
       fences.forEach(f => {
-        // 地图上显示围栏
-        const circle = new AMap.Circle({
-          map: map,
-          center: [f.center_lng, f.center_lat],
+        const circle = L.circle([f.center_lat, f.center_lng], {
           radius: f.radius,
           fillColor: '#ff4d4f',
           fillOpacity: 0.15,
-          strokeColor: '#ff4d4f',
-          strokeWeight: 2
-        });
+          color: '#ff4d4f',
+          weight: 2
+        }).addTo(map);
         geofenceCircles.push(circle);
         
-        // 列表中显示
         const item = document.createElement('div');
         item.className = 'geofence-item';
-        item.innerHTML = \`
-          <span>\${f.name} (半径 \${f.radius}米)</span>
-          <button class="btn btn-danger" onclick="deleteGeofence(\${f.id})">删除</button>
-        \`;
+        item.innerHTML = '<span>' + f.name + ' (半径 ' + f.radius + '米)</span>' +
+          '<button class="btn btn-danger" onclick="deleteGeofence(' + f.id + ')">删除</button>';
         list.appendChild(item);
       });
     }
     
     async function deleteGeofence(id) {
-      await fetch(API + '/geofence/' + id, { method: 'DELETE' });
+      await fetch(API + '/geofence/' + id + '?device_id=' + DEVICE_ID, { method: 'DELETE' });
       fetchGeofences();
     }
     
@@ -366,75 +412,98 @@ function getKidHTML() {
 <html>
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>位置上报</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>位置守护</title>
   <style>
-    body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; padding: 20px; text-align: center; background: #f5f5f5; }
-    .card { background: white; padding: 30px; border-radius: 16px; max-width: 400px; margin: 0 auto; }
-    h1 { font-size: 24px; margin-bottom: 10px; }
-    p { color: #666; margin: 10px 0; }
-    .status { padding: 8px 16px; border-radius: 20px; display: inline-block; margin: 10px 0; }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); min-height: 100vh; display: flex; align-items: center; justify-content: center; }
+    .card { background: white; padding: 40px 30px; border-radius: 20px; max-width: 350px; width: 90%; text-align: center; box-shadow: 0 10px 40px rgba(0,0,0,0.2); }
+    h1 { font-size: 28px; margin-bottom: 8px; }
+    p { color: #666; margin: 8px 0 20px; }
+    .status { padding: 12px 24px; border-radius: 24px; display: inline-block; font-size: 16px; font-weight: 500; }
     .status.active { background: #e6f7e6; color: #52c41a; }
     .status.error { background: #fff2f0; color: #ff4d4f; }
-    #info { margin-top: 20px; font-size: 14px; color: #999; }
+    .status.pending { background: #e6f7ff; color: #1890ff; }
+    #info { margin-top: 20px; font-size: 13px; color: #999; line-height: 1.6; }
+    .icon { font-size: 48px; margin-bottom: 16px; }
   </style>
 </head>
 <body>
   <div class="card">
-    <h1>📍 位置守护中</h1>
+    <div class="icon">📍</div>
+    <h1>位置守护中</h1>
     <p>爸爸/妈妈可以看到你的位置</p>
-    <div id="status" class="status active">正在定位...</div>
+    <div id="status" class="status pending">正在定位...</div>
     <div id="info"></div>
   </div>
 
   <script>
     const API = '/api';
     const DEVICE_ID = 'kid-1';
+    let watchId = null;
     
-    function sendLocation() {
+    function updateStatus(text, type) {
+      const el = document.getElementById('status');
+      el.textContent = text;
+      el.className = 'status ' + type;
+    }
+    
+    async function sendLocation(pos) {
+      try {
+        const res = await fetch(API + '/location', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            device_id: DEVICE_ID,
+            latitude: pos.coords.latitude,
+            longitude: pos.coords.longitude,
+            accuracy: pos.coords.accuracy,
+            battery: null
+          })
+        });
+        
+        const data = await res.json();
+        updateStatus('守护中 ✅', 'active');
+        document.getElementById('info').innerHTML = 
+          '位置: ' + pos.coords.latitude.toFixed(4) + ', ' + pos.coords.longitude.toFixed(4) + '<br>' +
+          '精度: ' + Math.round(pos.coords.accuracy) + '米<br>' +
+          '更新: ' + new Date().toLocaleTimeString();
+      } catch (e) {
+        updateStatus('上报失败', 'error');
+        document.getElementById('info').textContent = e.message;
+      }
+    }
+    
+    function startTracking() {
       if (!navigator.geolocation) {
-        document.getElementById('status').className = 'status error';
-        document.getElementById('status').textContent = '设备不支持定位';
+        updateStatus('设备不支持定位', 'error');
         return;
       }
       
-      navigator.geolocation.getCurrentPosition(
-        async (pos) => {
-          try {
-            const res = await fetch(API + '/location', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                device_id: DEVICE_ID,
-                latitude: pos.coords.latitude,
-                longitude: pos.coords.longitude,
-                accuracy: pos.coords.accuracy,
-                battery: (await navigator.getBattery?.())?.level * 100 || null
-              })
-            });
-            
-            const data = await res.json();
-            document.getElementById('status').textContent = '守护中 ✅';
-            document.getElementById('info').innerHTML = \`
-              位置: \${pos.coords.latitude.toFixed(4)}, \${pos.coords.longitude.toFixed(4)}<br>
-              精度: \${Math.round(pos.coords.accuracy)}米<br>
-              更新时间: \${new Date().toLocaleTimeString()}
-            \`;
-          } catch (e) {
-            document.getElementById('status').className = 'status error';
-            document.getElementById('status').textContent = '上报失败';
-          }
-        },
+      // 持续监听位置变化
+      watchId = navigator.geolocation.watchPosition(
+        sendLocation,
         (err) => {
-          document.getElementById('status').className = 'status error';
-          document.getElementById('status').textContent = '定位失败: ' + err.message;
+          updateStatus('定位失败', 'error');
+          document.getElementById('info').textContent = err.message;
         },
-        { enableHighAccuracy: true, timeout: 10000 }
+        { 
+          enableHighAccuracy: true, 
+          timeout: 10000,
+          maximumAge: 5000
+        }
       );
     }
     
-    sendLocation();
-    setInterval(sendLocation, 10000); // 每10秒上报一次
+    // 页面加载后开始追踪
+    startTracking();
+    
+    // 页面可见时重新启动
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible' && !watchId) {
+        startTracking();
+      }
+    });
   </script>
 </body>
 </html>`;
