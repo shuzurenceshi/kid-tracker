@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>孩子位置追踪 - 家长端</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f5f5f5; }
+    #map { width: 100%; height: 60vh; }
+    .panel { padding: 16px; background: white; }
+    .btn { padding: 10px 16px; border: none; border-radius: 8px; cursor: pointer; font-size: 14px; margin: 4px; }
+    .btn-primary { background: #1677ff; color: white; }
+    .btn-danger { background: #ff4d4f; color: white; }
+    .btn-secondary { background: #f0f0f0; color: #333; }
+    .info { padding: 12px 0; color: #666; font-size: 14px; border-bottom: 1px solid #eee; }
+    .status { padding: 4px 8px; border-radius: 4px; font-size: 12px; }
+    .status.online { background: #e6f7e6; color: #52c41a; }
+    .status.offline { background: #fff2f0; color: #ff4d4f; }
+    #addGeofence { display: none; padding: 16px; background: #f9f9f9; border-radius: 8px; margin-top: 12px; }
+    #addGeofence input { padding: 8px 12px; margin: 6px 0; border: 1px solid #ddd; border-radius: 6px; width: 100%; }
+    #addGeofence h4 { margin-bottom: 8px; }
+    .geofence-list { margin-top: 12px; }
+    .geofence-item { padding: 10px 12px; background: #fafafa; border-radius: 8px; margin: 6px 0; display: flex; justify-content: space-between; align-items: center; }
+    .tabs { display: flex; border-bottom: 1px solid #eee; }
+    .tab { flex: 1; padding: 12px; text-align: center; cursor: pointer; color: #666; }
+    .tab.active { color: #1677ff; border-bottom: 2px solid #1677ff; }
+    #kidPanel { display: none; }
+    .kid-card { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 30px; text-align: center; min-height: 70vh; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+    .kid-card .icon { font-size: 64px; margin-bottom: 16px; }
+    .kid-card h1 { font-size: 28px; margin-bottom: 8px; }
+    .kid-card .status { font-size: 16px; padding: 12px 24px; margin: 20px 0; background: rgba(255,255,255,0.2); }
+    .kid-card #info { font-size: 14px; opacity: 0.9; line-height: 1.6; }
+  </style>
+</head>
+<body>
+  <div class="tabs">
+    <div class="tab active" onclick="switchTab('parent')">👨‍👧 家长端</div>
+    <div class="tab" onclick="switchTab('kid')">👦 孩子端</div>
+  </div>
+  
+  <div id="parentPanel">
+    <div id="map"></div>
+    <div class="panel">
+      <div class="info">
+        <span>状态: <span id="status" class="status offline">离线</span></span>
+        <span style="margin-left: 16px">电量: <span id="battery">--</span>%</span>
+        <span style="margin-left: 16px">更新: <span id="updateTime">--</span></span>
+      </div>
+      <div style="margin-top: 12px">
+        <button class="btn btn-primary" onclick="toggleHistory()">📊 历史轨迹</button>
+        <button class="btn btn-primary" onclick="toggleGeofencePanel()">🔒 添加围栏</button>
+        <button class="btn btn-secondary" onclick="centerToKid()">📍 定位</button>
+      </div>
+      <div id="addGeofence">
+        <h4>添加电子围栏</h4>
+        <input type="text" id="fenceName" placeholder="围栏名称（如：学校、家）">
+        <input type="number" id="fenceRadius" placeholder="半径（米）" value="500">
+        <p style="font-size: 12px; color: #999; margin: 8px 0;">💡 点击地图选择围栏中心点</p>
+        <button class="btn btn-primary" onclick="saveGeofence()">保存围栏</button>
+        <button class="btn btn-secondary" onclick="toggleGeofencePanel()">取消</button>
+      </div>
+      <div class="geofence-list" id="geofenceList"></div>
+    </div>
+  </div>
+  
+  <div id="kidPanel">
+    <div class="kid-card">
+      <div class="icon">📍</div>
+      <h1>位置守护中</h1>
+      <p>爸爸/妈妈可以看到你的位置</p>
+      <div id="kidStatus" class="status">正在定位...</div>
+      <div id="kidInfo"></div>
+    </div>
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script>
+    // ========== 数据存储（使用 localStorage 模拟后端）==========
+    const DEVICE_ID = 'kid-1';
+    
+    function saveLocation(data) {
+      // 保存最新位置
+      localStorage.setItem('location:latest', JSON.stringify(data));
+      // 保存历史
+      let history = JSON.parse(localStorage.getItem('location:history') || '[]');
+      history.push(data);
+      if (history.length > 1000) history = history.slice(-1000);
+      localStorage.setItem('location:history', JSON.stringify(history));
+    }
+    
+    function getLatestLocation() {
+      return JSON.parse(localStorage.getItem('location:latest') || '{}');
+    }
+    
+    function getHistory() {
+      return JSON.parse(localStorage.getItem('location:history') || '[]');
+    }
+    
+    function saveGeofences(fences) {
+      localStorage.setItem('geofences', JSON.stringify(fences));
+    }
+    
+    function getGeofences() {
+      return JSON.parse(localStorage.getItem('geofences') || '[]');
+    }
+    
+    // ========== 家长端 ==========
+    let map, marker, polyline;
+    let showHistory = false, addingGeofence = false, geofenceCenter = null;
+    let geofenceCircles = [];
+    
+    function initParent() {
+      map = L.map('map').setView([39.90923, 116.397428], 15);
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '© OpenStreetMap'
+      }).addTo(map);
+      
+      marker = L.marker([39.90923, 116.397428]).addTo(map);
+      polyline = L.polyline([], { color: '#1677ff', weight: 4 }).addTo(map);
+      
+      map.on('click', function(e) {
+        if (addingGeofence) {
+          geofenceCenter = { lat: e.latlng.lat, lng: e.latlng.lng };
+          alert('围栏中心已设置！点击「保存围栏」完成添加');
+        }
+      });
+      
+      setInterval(updateParentView, 3000);
+      updateParentView();
+      renderGeofences();
+    }
+    
+    function updateParentView() {
+      const data = getLatestLocation();
+      
+      if (data.latitude) {
+        marker.setLatLng([data.latitude, data.longitude]);
+        
+        const elapsed = (Date.now() - data.timestamp) / 1000;
+        const isOnline = elapsed < 30;
+        
+        document.getElementById('status').textContent = isOnline ? '在线' : '离线';
+        document.getElementById('status').className = 'status ' + (isOnline ? 'online' : 'offline');
+        document.getElementById('battery').textContent = data.battery || '--';
+        document.getElementById('updateTime').textContent = new Date(data.timestamp).toLocaleTimeString();
+      }
+    }
+    
+    function centerToKid() {
+      const data = getLatestLocation();
+      if (data.latitude) {
+        map.setView([data.latitude, data.longitude], 16);
+      } else {
+        alert('暂无位置数据');
+      }
+    }
+    
+    function toggleHistory() {
+      showHistory = !showHistory;
+      
+      if (showHistory) {
+        const history = getHistory();
+        if (history.length > 0) {
+          const path = history.map(p => [p.latitude, p.longitude]);
+          polyline.setLatLngs(path);
+          map.fitBounds(polyline.getBounds());
+        } else {
+          alert('暂无历史轨迹');
+          showHistory = false;
+        }
+      } else {
+        polyline.setLatLngs([]);
+      }
+    }
+    
+    function toggleGeofencePanel() {
+      const panel = document.getElementById('addGeofence');
+      addingGeofence = !addingGeofence;
+      panel.style.display = addingGeofence ? 'block' : 'none';
+      geofenceCenter = null;
+      if (addingGeofence) {
+        alert('请在地图上点击选择围栏中心点');
+      }
+    }
+    
+    function saveGeofence() {
+      if (!geofenceCenter) {
+        alert('请先在地图上点击选择中心点');
+        return;
+      }
+      
+      const name = document.getElementById('fenceName').value || '围栏';
+      const radius = parseInt(document.getElementById('fenceRadius').value) || 500;
+      
+      const fences = getGeofences();
+      fences.push({
+        id: Date.now(),
+        name: name,
+        center_lat: geofenceCenter.lat,
+        center_lng: geofenceCenter.lng,
+        radius: radius
+      });
+      saveGeofences(fences);
+      
+      alert('围栏「' + name + '」已添加！');
+      toggleGeofencePanel();
+      renderGeofences();
+    }
+    
+    function renderGeofences() {
+      const fences = getGeofences();
+      
+      geofenceCircles.forEach(c => c.remove());
+      geofenceCircles = [];
+      
+      const list = document.getElementById('geofenceList');
+      list.innerHTML = '';
+      
+      fences.forEach(f => {
+        const circle = L.circle([f.center_lat, f.center_lng], {
+          radius: f.radius,
+          fillColor: '#ff4d4f',
+          fillOpacity: 0.15,
+          color: '#ff4d4f',
+          weight: 2
+        }).addTo(map);
+        geofenceCircles.push(circle);
+        
+        const item = document.createElement('div');
+        item.className = 'geofence-item';
+        item.innerHTML = '<span>' + f.name + ' (半径 ' + f.radius + '米)</span>' +
+          '<button class="btn btn-danger" onclick="deleteGeofence(' + f.id + ')">删除</button>';
+        list.appendChild(item);
+      });
+    }
+    
+    function deleteGeofence(id) {
+      let fences = getGeofences();
+      fences = fences.filter(f => f.id !== id);
+      saveGeofences(fences);
+      renderGeofences();
+    }
+    
+    // ========== 孩子端 ==========
+    let watchId = null;
+    
+    function initKid() {
+      if (!navigator.geolocation) {
+        document.getElementById('kidStatus').textContent = '设备不支持定位';
+        return;
+      }
+      
+      watchId = navigator.geolocation.watchPosition(
+        (pos) => {
+          const data = {
+            device_id: DEVICE_ID,
+            latitude: pos.coords.latitude,
+            longitude: pos.coords.longitude,
+            accuracy: pos.coords.accuracy,
+            battery: null,
+            timestamp: Date.now()
+          };
+          
+          saveLocation(data);
+          
+          // 检查围栏
+          checkGeofences(data.latitude, data.longitude);
+          
+          document.getElementById('kidStatus').textContent = '守护中 ✅';
+          document.getElementById('kidInfo').innerHTML = 
+            '位置: ' + pos.coords.latitude.toFixed(4) + ', ' + pos.coords.longitude.toFixed(4) + '<br>' +
+            '精度: ' + Math.round(pos.coords.accuracy) + '米<br>' +
+            '更新: ' + new Date().toLocaleTimeString();
+        },
+        (err) => {
+          document.getElementById('kidStatus').textContent = '定位失败';
+          document.getElementById('kidInfo').textContent = err.message;
+        },
+        { enableHighAccuracy: true, timeout: 10000, maximumAge: 5000 }
+      );
+    }
+    
+    function checkGeofences(lat, lng) {
+      const fences = getGeofences();
+      fences.forEach(f => {
+        const R = 6371000;
+        const dLat = (f.center_lat - lat) * Math.PI / 180;
+        const dLng = (f.center_lng - lng) * Math.PI / 180;
+        const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+                  Math.cos(lat * Math.PI / 180) * Math.cos(f.center_lat * Math.PI / 180) *
+                  Math.sin(dLng/2) * Math.sin(dLng/2);
+        const distance = R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+        
+        if (distance > f.radius) {
+          alert('⚠️ 你已离开「' + f.name + '」围栏！');
+        }
+      });
+    }
+    
+    // ========== 页面切换 ==========
+    function switchTab(tab) {
+      document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+      
+      if (tab === 'parent') {
+        document.querySelector('.tab:first-child').classList.add('active');
+        document.getElementById('parentPanel').style.display = 'block';
+        document.getElementById('kidPanel').style.display = 'none';
+      } else {
+        document.querySelector('.tab:last-child').classList.add('active');
+        document.getElementById('parentPanel').style.display = 'none';
+        document.getElementById('kidPanel').style.display = 'block';
+        initKid();
+      }
+    }
+    
+    // 初始化
+    initParent();
+  </script>
+</body>
+</html>
