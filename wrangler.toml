@@ -1,0 +1,8 @@
+name = "kid-tracker"
+main = "src/worker.js"
+compatibility_date = "2024-01-01"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "kid-tracker-db"
+database_id = "will-be-created"

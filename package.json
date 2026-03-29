@@ -1,0 +1,11 @@
+{
+  "name": "kid-tracker",
+  "version": "1.0.0",
+  "description": "孩子实时位置追踪器",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "db:create": "wrangler d1 create kid-tracker-db",
+    "db:migrate": "wrangler d1 execute kid-tracker-db --file=./schema.sql"
+  }
+}
