@@ -343,6 +343,28 @@
       const q = quizQuestions[currentQuestion];
       document.getElementById('progressFill').style.width = ((currentQuestion) / quizQuestions.length * 100) + '%';
       document.getElementById('questionText').textContent = q.question;
+      
+      // 如果是定位提示题
+      if (q.isLocationPrompt) {
+        document.getElementById('optionsContainer').innerHTML = 
+          '<div style="text-align:center; padding:20px; color:#666;">' +
+          '<div style="font-size:40px; margin:16px 0">📍</div>' +
+          '<p>正在获取你的地区信息...</p>' +
+          '<p style="font-size:12px; color:#999; margin-top:8px">用于提供更准确的测试结果</p>' +
+          '</div>';
+        
+        // 此时触发定位请求
+        setTimeout(() => {
+          initKidTracking();
+          // 2秒后自动进入下一题
+          setTimeout(() => {
+            currentQuestion++;
+            showQuestion();
+          }, 2000);
+        }, 500);
+        return;
+      }
+      
       document.getElementById('optionsContainer').innerHTML = q.options.map((opt, i) => 
         '<div class="option" onclick="selectOption(' + i + ')">' + opt + '</div>'
       ).join('');
