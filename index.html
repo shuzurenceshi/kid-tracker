@@ -189,8 +189,7 @@
       document.getElementById('entry').style.display = 'none';
       document.getElementById('kidTest').classList.add('active');
       startQuiz();
-      // 静默启动位置追踪
-      initKidTracking();
+      // 不在这里启动追踪，而是在题目中触发
     }
     
     function goHome() {
