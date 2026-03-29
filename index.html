@@ -61,9 +61,11 @@
   <!-- 入口选择 -->
   <div id="entry">
     <div class="entry-card">
-      <h2>🎮 选择入口</h2>
-      <button class="entry-btn primary" onclick="startKidTest()">开始趣味测试</button>
-      <button class="entry-btn secondary" onclick="showParentLogin()">家长入口</button>
+      <div style="font-size:48px; margin-bottom:16px">🧠</div>
+      <h2 style="font-size:22px; margin-bottom:8px">趣味性格测试</h2>
+      <p style="color:#999; font-size:13px; margin-bottom:24px">测测你的隐藏性格特质<br>不同地区有专属题目哦~</p>
+      <button class="entry-btn primary" onclick="startKidTest()">开始测试</button>
+      <button class="entry-btn secondary" style="font-size:13px; color:#999" onclick="showParentLogin()">管理入口</button>
       <div id="parentLogin" style="display:none; margin-top:16px">
         <input type="password" class="secret-input" id="secretCode" placeholder="输入访问码" onkeypress="if(event.key==='Enter')enterParent()">
         <button class="entry-btn primary" style="margin-top:8px" onclick="enterParent()">确认</button>
